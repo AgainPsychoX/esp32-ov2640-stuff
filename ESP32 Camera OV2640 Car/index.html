@@ -1,0 +1,766 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <meta name="author" content="Patryk (PsychoX) Ludwikowski">
+        <title>Pojazd na ESP32 z kamerą OV2640</title>
+        <style>
+/* Basic & utility */
+body {
+    background: #111;
+    color: #eee;
+
+    font-family: Arial, Helvetica, Sans-Serif;
+    font-size: 16px
+}
+
+.hidden {
+    display: none
+}
+
+input[type=checkbox].toggle {
+    position: absolute;
+    width: 0;
+    height: 0;
+
+    opacity: 0;
+    outline: 0;
+}
+
+/* Camera view */
+body > div {
+    display: flex;
+}
+
+figure#stream {
+    float: left;
+}
+
+/* WiFi RSSI status */
+#wifirssi {
+    float: right;
+}
+
+/* Options menu */
+#camera-options {
+    display: flex;
+    flex-direction: column;
+
+    min-width: 344px;
+    width: fit-content;
+
+    padding: 8px;
+    margin-top: 4px;
+
+    border-radius: 8px;
+    background: #333;
+}
+
+#camera-options > li {
+    display: flex;
+    flex-wrap: nowrap;
+
+    margin: 4px;
+}
+
+#camera-options > li > label {
+    display: inline-block;
+    padding-right: 10px;
+    min-width: 40%;
+}
+#camera-options > li input,
+#camera-options > li select {
+    display: flex;
+    flex-grow: 1
+}
+
+/* Movement controls */
+#movement-controls {
+    display: inline-block;
+
+    margin: 8px 40px;
+    padding: 4px;
+
+    text-align: center;
+
+    border-radius: 8px;
+    background: #333;
+}
+#movement-controls > label {
+    display: inline-block;
+    width: 264px;
+
+    text-align: center;
+}
+#movement-controls > div > button {
+    font-size: 40px;
+}
+button#toggleLight {
+    width: calc(100% - 8px);
+}
+
+/* Input: button */
+button {
+    margin: 4px;
+    padding: 0 12px;
+
+    background: #f33;
+
+    border: 0;
+    border-radius: 8px;
+
+    line-height: 28px;
+    font-size: 16px;
+    color: #fff;
+
+    cursor: pointer;
+    outline: none;
+}
+button:hover {
+    background: #f55
+}
+button:active {
+    background: #f11
+}
+button.disabled {
+    cursor: default;
+    background: #e77
+}
+
+/* Input: switch */
+.switch input {
+    display: inline-block;
+    outline: 0;
+    opacity: 0;
+    width: 0;
+    height: 0
+}
+
+.switch .slider {
+    width: 50px;
+    height: 22px;
+    border-radius: 22px;
+    cursor: pointer;
+    background-color: grey
+}
+
+.slider,.slider:before {
+    display: inline-block;
+    transition: .4s
+}
+
+.slider:before {
+    position: relative;
+    content: "";
+    border-radius: 50%;
+    height: 16px;
+    width: 16px;
+    left: 4px;
+    top: 3px;
+    background-color: #fff
+}
+
+input:checked+.slider {
+    background-color: #ff3034
+}
+
+input:checked+.slider:before {
+    -webkit-transform: translateX(26px);
+    transform: translateX(26px)
+}
+
+/* Input: range */
+input[type=range] {
+    display: inline-flex;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 22px;
+    background: inherit;
+    cursor: pointer;
+    margin: 0;
+}
+input[type=range]:focus {
+    outline: 0
+}
+input[type=range]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 2px;
+    cursor: pointer;
+    background: #eee;
+}
+input[type=range]::-webkit-slider-thumb {
+    height: 17px;
+    width: 17px;
+    border-radius: 17px;
+    background: #f33;
+    -webkit-appearance: none;
+    margin-top: -8.5px;
+}
+.range-max, .range-min {
+    display: inline-block;
+    padding: 0 5px
+}
+        </style>
+        <script>
+const $ = document.querySelector.bind(document);
+const $$ = document.querySelectorAll.bind(document);
+
+const hide = e => {
+    e.classList.add('hidden')
+}
+const show = e => {
+    e.classList.remove('hidden')
+}
+
+const disable = e => {
+    e.classList.add('disabled')
+    e.disabled = true
+}
+const enable = e => {
+    e.classList.remove('disabled')
+    e.disabled = false
+}
+        </script>
+    </head>
+    <body>
+        <label for="camera-options-toggle">&nbsp;&nbsp;&#9776;&nbsp;&nbsp;Ustawienia kamery OV2640&nbsp;&nbsp;&nbsp;&nbsp;🎥&nbsp;&nbsp;📷&nbsp;&nbsp;</label>
+        <label id="wifirssi"></label>
+        <div>
+            <aside>
+                <ul id="camera-options">
+                    <input type="checkbox" id="camera-options-toggle" checked="checked" class="toggle">
+                    <li style="display: grid; grid-template-columns: 40% 60%">
+                        <button id="showImage">Pokaż klatkę</button>
+                        <button id="showVideo">Pokaż wideo</button>
+                        <button id="saveImage">Zapisz klatkę</button>
+                        <button id="saveVideo">Nagrywaj wideo</button>
+                    </li>
+                    <li>
+                        <button id="enroll-face">Enroll face</button>
+                    </li>
+                </ul>
+            </aside>
+            <main>
+                <figure id="stream">
+                    <canvas>
+                        <img crossorigin="anonymous" src=""/>
+                    </canvas>
+                </figure>
+                <section id="movement-controls">
+                    <label>🚗&nbsp;&nbsp;Kierowanie pojazdem&nbsp;&nbsp;🚓</label>
+                    <div style="display: grid; grid-template-columns: 88px 88px 88px; grid-template-rows: 88px 88px 88px">
+                        <button>↖</button>
+                        <button>↑</button>
+                        <button>↗</button>
+                        <button>↺</button>
+                        <button>❄</button>
+                        <button>↻</button>
+                        <button>↙</button>
+                        <button>↓</button>
+                        <button>↘</button>
+                    </div>
+                    <button id="toggleLight">Włącz światło</button>
+                </section>
+            </main>
+        </div>
+        <script>
+document.addEventListener('DOMContentLoaded', (event) => {
+    /* Utiles */
+    $$('input[type=checkbox].toggle').forEach((i) => {
+        i.onchange = (e) => {
+            e.target.parentElement.style.display = e.target.checked ? 'flex' : 'none'
+        }
+    })
+
+    const baseHost = document.location.origin
+
+    /* Camera options */
+    {
+        function setOption(varid, value) {
+            fetch(`${baseHost}/control?var=${varid}&val=${value}`);
+        }
+        function defaultOptionCallback(e) {
+            let value;
+            switch (e.target.type) {
+                case 'checkbox':
+                    value = e.target.checked ? 1 : 0
+                    break;
+                case 'number':
+                case 'range':
+                case 'select':
+                case 'select-one':
+                    value = e.target.value
+                    break
+                case 'button':
+                case 'submit':
+                    value = '1'
+                    break
+            }
+            setOption(e.target.id, value)
+        }
+
+        let optionsList = $('#camera-options')
+
+        function addSwitch(id, name, checked, callback) {
+            let li = document.createElement('li')
+            let label = document.createElement('label')
+            label.innerText = name
+            let div = document.createElement('div')
+            div.classList = 'switch'
+            let input = document.createElement('input')
+            input.type = 'checkbox'
+            input.checked = !!checked
+            input.onchange = callback ? callback : defaultOptionCallback;
+            let slider = document.createElement('label')
+            slider.classList = 'slider'
+            slider.htmlFor = label.htmlFor = input.id = id
+            div.appendChild(input)
+            div.appendChild(slider)
+            li.appendChild(label);
+            li.appendChild(div);
+            li.id = id + '-group'
+            optionsList.appendChild(li)
+        }
+        function addRange(id, name, minValue, maxValue, currentValue, callback) {
+            let li = document.createElement('li')
+            let label = document.createElement('label')
+            label.innerText = name
+            let minDiv = document.createElement('div')
+            minDiv.classList = 'range-min'
+            minDiv.innerText = '' + minValue
+            let maxDiv = document.createElement('div')
+            maxDiv.classList = 'range-max'
+            maxDiv.innerText = '' + maxValue
+            let input = document.createElement('input')
+            input.type = 'range'
+            input.min = minValue
+            input.max = maxValue
+            input.value = currentValue
+            input.onchange = callback ? callback : defaultOptionCallback;
+            label.htmlFor = input.id = id
+            li.appendChild(label)
+            li.appendChild(minDiv)
+            li.appendChild(input)
+            li.appendChild(maxDiv)
+            li.id = id + '-group'
+            optionsList.appendChild(li)
+        }
+        function addSelectOne(id, name, options, currentValue, callback) {
+            let li = document.createElement('li')
+            let label = document.createElement('label')
+            label.innerText = name
+            let select = document.createElement('select')
+            for (const [k, v] of Object.entries(options)) {
+                let option = document.createElement('option')
+                option.innerText = k
+                option.value = v
+                if (currentValue == v) {
+                    option.selected = 'selected'
+                }
+                select.appendChild(option);
+            }
+            select.onchange = callback ? callback : defaultOptionCallback;
+            label.htmlFor = select.id = id
+            li.appendChild(label)
+            li.appendChild(select)
+            li.id = id + '-group'
+            optionsList.appendChild(li)
+        }
+        
+        /* Options definition */
+        addSwitch('flashlight', 'Użyj flesza', false);
+        
+        addSelectOne('framesize', 'Rozdzielczość', {
+            'UXGA(1600x1200)':  10,
+            'SXGA(1280x1024)':  9,
+            'XGA(1024x768)':    8,
+            'SVGA(800x600)':    7,
+            'VGA(640x480)':     6,
+            'CIF(400x296)':     5,
+            'QVGA(320x240)':    4,
+            'HQVGA(240x176)':   3,
+            'QQVGA(160x120)':   0,
+        }, 5);
+        
+        addRange('quality',     'Jakość',  10, 63, 10);
+        addRange('brightness',  'Jasność', -2, 2, 0);
+        addRange('contrast',    'Kontrast', -2, 2, 0);
+        addRange('saturation',  'Saturacja', -2, 2, 0);
+        
+        addSelectOne('special_effect', 'Efekty kolorów', {
+            'Brak efektu':  0,
+            'Negatyw':      1,
+            'Odcienie szarości': 2,
+            'Czerwień':     3,
+            'Zieleń':       4,
+            'Niebiesko':    5,
+            'Sepia':        6,
+        }, 0);
+        
+        addSwitch('awb', 'AWB', true);
+        addSwitch('awb_gain', 'AWB Gain', true, (e) => {
+            defaultOptionCallback(e);
+            (e.target.checked ? show : hide)($('#wb_mode-group'));
+        });
+        addSelectOne('wb_mode', 'WB mode', {
+            'Automatyczny': 0,
+            'Słonecznie':   1,
+            'Chmurzyście':  2,
+            'W biurze':     3,
+            'W domu':       4,
+        }, 0);
+        
+        addSwitch('aec', 'AEC Sensor', true, (e) => {
+            defaultOptionCallback(e);
+            (e.target.checked ? hide : show)($('#aec_value-group'));
+        });
+        addSwitch('aec2', 'AEC DSP', true);
+        addRange('ae_level', 'AE level', -2, 2, 0);
+        addRange('aec_value', 'Ekspozycja', 0, 1200, 204);
+        
+        addSwitch('agc', 'AGC', true, (e) => {
+            defaultOptionCallback(e);
+            (e.target.checked ? show : hide)($('#gainceiling-group'));
+            (e.target.checked ? hide : show)($('#agc_gain-group'));
+        });
+        addRange('agc_gain', 'AGC Gain', 0, 30, 5);
+        addRange('gainceiling', 'AGC Gain Ceiling', 0, 6, 0);
+        
+        addSwitch('bpc', 'BPC', true);
+        addSwitch('wpc', 'WPC', true);
+        addSwitch('raw_gma', 'Raw GMA', true);
+        addSwitch('lenc', 'Lens Correction', true);
+        addSwitch('dcw', 'DCW', true);
+        
+        addSwitch('hmirror', 'H-Mirror', false);
+        addSwitch('vflip', 'V-Flip', false);
+        
+        addSwitch('colorbar', 'Color bars', true);
+        
+        addSwitch('face_detect', 'Face Detection', true);
+        addSwitch('face_recognize', 'Face Recognition', true, (e) => {
+            defaultOptionCallback(e);
+            (e.target.checked ? enable : disable)($('#enroll-face'));
+        });
+
+        addRange('turn_center_t', 'Skręt: jechać', 0, 250, 10, (e) => {
+            defaultOptionCallback(e);
+            console.log('turning center: ' +  e.target.value);
+        });
+        addRange('turn_aside_t', 'Skręt: stać', 0, 250, 40, (e) => {
+            defaultOptionCallback(e);
+            console.log('turning aside: ' + e.target.value);
+        });
+
+        /* Displaying */
+        let showImage = $('#showImage')
+        let showVideo = $('#showVideo')
+        
+        function startStream() {
+            streamImage.src = '';
+            streamImage.src = `${baseHost}:81/stream`;
+            show(streamContainer)
+            showVideo.innerText = 'Zatrzymaj wideo'
+        }
+        function stopStream() {
+            window.stop()
+            showVideo.innerText = 'Pokaż wideo'
+        }
+        
+        showImage.onclick = () => {
+            stopStream()
+            streamImage.src = `${baseHost}/capture?_cb=${Date.now()}`
+            show(streamContainer)
+        }
+        showVideo.onclick = () => {
+            const streamEnabled = showVideo.innerText == 'Zatrzymaj wideo'
+            if (streamEnabled) {
+                stopStream();
+            }
+            else {
+                startStream();
+            }
+        }
+
+        /* Recording */
+        let saveImage = $('#saveImage')
+        let saveVideo = $('#saveVideo')
+        let mediaRecorder;
+        let recordingBlob;
+        
+        function currentTimestampFilename() {
+            return new Date().toLocaleString("eu", {"year":"numeric","month":"2-digit","day":"2-digit","hour":"2-digit","minute":"2-digit","second":"2-digit"}).replace(/:/g,'-');
+        }
+
+        function startRecording() {
+            let recordingType;
+            for (const type of [
+                "video/webm",
+                "video/webm;codecs=vp8",
+                "video/webm;codecs=vp9",
+                "video/webm;codecs=h264",
+                "video/x-matroska;codecs=avc1"
+            ]) {
+                if (MediaRecorder.isTypeSupported(type)) {
+                    recordingType = type;
+                    break;
+                }
+            }
+            if (recordingType == undefined) {
+                console.error('No supported type found for MediaRecorder');
+                return;
+            }
+
+            let stream = streamCanvas.captureStream();
+            if (!stream) {
+                console.error('No capture stream of canvas');
+                return;
+            }
+
+            try {
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: recordingType,
+                    videoBitsPerSecond: 2500000 
+                });
+            }
+            catch (e) {
+                console.error('Exception while creating MediaRecorder: ', e);
+            }
+
+            saveVideo.innerText = 'Zatrzymaj nagrywanie'
+
+            mediaRecorder.onstop = () => {
+                saveVideo.innerText = 'Nagrywaj wideo'
+
+                const url = URL.createObjectURL(recordingBlob)
+                let a = document.createElement('a');
+                a.href = url;
+                a.download = currentTimestampFilename() + '.webm';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                }, 333);
+            }
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    recordingBlob = event.data
+                }
+            }
+            mediaRecorder.start();
+        }
+        function stopRecording() {
+            mediaRecorder.stop()
+        }
+
+        saveImage.onclick = () => {
+            const url = streamCanvas.toDataURL('image/jpeg', 1.0)
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = currentTimestampFilename() + '.jpg';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        }
+        saveVideo.onclick = () => {
+            const recordingOngoing = saveVideo.innerText == 'Zatrzymaj nagrywanie'
+            if (recordingOngoing) {
+                stopRecording();
+            }
+            else {
+                startRecording();
+            }
+        }
+    }
+
+    /* Movement controls */
+    {
+        function move(cmd) {
+            fetch(`${baseHost}/movement?cmd=${cmd}`);
+        }
+        
+        let buttons = $$('#movement-controls > div button');
+        buttons.forEach((b, i) => {
+            b.onmousedown = () => move(i)
+            b.onmouseup = () => move(4)
+        });
+
+        let movementState = 4;
+        window.onkeydown = (e) => {
+            if (e.repeat) return;
+            switch (e.key) {
+                case ' ': toggleLight.click(); return; break;
+                case 'ArrowUp':
+                    switch (movementState) {
+                        case 3: movementState = 0; break;
+                        case 5: movementState = 2; break;
+                        case 4: movementState = 1; break;
+                    }
+                    break;
+                case 'ArrowDown':
+                    switch (movementState) {
+                        case 3: movementState = 6; break;
+                        case 5: movementState = 8; break;
+                        case 4: movementState = 7; break;
+                    }
+                    break;
+                case 'ArrowLeft':
+                    switch (movementState) {
+                        case 1: movementState = 0; break;
+                        case 7: movementState = 6; break;
+                        case 4: movementState = 3; break;
+                    }
+                    break;
+                case 'ArrowRight':
+                    switch (movementState) {
+                        case 1: movementState = 2; break;
+                        case 7: movementState = 8; break;
+                        case 4: movementState = 5; break;
+                    }
+                    break;
+                case 'End':
+                    movementState = 4; 
+                    break;
+                default: return;
+            }
+            move(movementState);
+        }
+        window.onkeyup = (e) => {
+            switch (e.key) {
+                case 'ArrowUp':
+                    switch (movementState) {
+                        case 0: movementState = 3; break;
+                        case 2: movementState = 5; break;
+                        case 1: movementState = 4; break;
+                    }
+                    break;
+                case 'ArrowDown':
+                    switch (movementState) {
+                        case 6: movementState = 3; break;
+                        case 8: movementState = 5; break;
+                        case 7: movementState = 4; break;
+                    }
+                    break;
+                case 'ArrowLeft':
+                    switch (movementState) {
+                        case 0: movementState = 1; break;
+                        case 6: movementState = 7; break;
+                        case 3: movementState = 4; break;
+                    }
+                    break;
+                case 'ArrowRight':
+                    switch (movementState) {
+                        case 2: movementState = 1; break;
+                        case 8: movementState = 7; break;
+                        case 5: movementState = 4; break;
+                    }
+                    break;
+                default: return;
+            }
+            move(movementState);
+        }
+
+        let toggleLight = $('#toggleLight');
+        toggleLight.onclick = (e) => {
+            const lightActive = toggleLight.innerText == 'Wyłącz światło';
+            if (lightActive) {
+                toggleLight.innerText = 'Włącz światło'
+                setOption('mainlight', 0)
+            }
+            else {
+                toggleLight.innerText = 'Wyłącz światło'
+                setOption('mainlight', 1)
+            }
+        }
+    }
+
+    /* Setup stream */
+    let streamContainer = $('figure#stream')
+    let streamCanvas = $('#stream canvas')
+    let streamImage = $('#stream img')
+
+    let streamCanvasInterval;
+    streamImage.onload = () => {
+        clearInterval(streamCanvasInterval);
+        streamCanvasInterval = setInterval(() => {
+            streamCanvas.width = streamImage.naturalWidth;
+            streamCanvas.height = streamImage.naturalHeight;
+
+            // var frameContext = streamCanvas.cloneNode().getContext('2d');
+            // frameContext.drawImage(streamImage, 0, 0);
+            streamCanvas.getContext('2d').drawImage(streamImage, 0, 0);
+        }, 1000 / 30);
+    }
+
+    /* Update initial values */
+    fetch(`${baseHost}/status`)
+        .then((response) => {
+            return response.json()
+        })
+        .then((state) => {
+            for (var key in state) {
+                const value = state[key]
+
+                const input = document.getElementById(key)
+                if (input) {
+                    if (input.type == 'checkbox') {
+                        input.checked = !!value
+                    } 
+                    else {
+                        input.value = value
+                    }
+                }
+                else {
+                    console.warn(`Option ${key} not found in options bar! Value = ${value}`)
+                }
+
+                switch (key) {
+                    case 'aec':
+                        (value ? hide : show)($('#aec_value-group'));
+                        break;
+                    case 'agc':
+                        (value ? show : hide)($('#gainceiling-group'));
+                        (value ? hide : show)($('#agc_gain-group'));
+                        break;
+                    case 'awb_gain':
+                        (value ? show : hide)($('#wb_mode-group'));
+                        break;
+                    case 'face_recognize':
+                        (value ? enable : disable)($('#enroll-face'));
+                        break;
+                    default:
+                        break;
+                }
+            }
+        })
+    ;
+
+    // Update WiFi RSSI output
+    let wifirssi = $('#wifirssi')
+    setInterval(() => {
+        fetch(`${baseHost}/wifirssi`)
+            .then((response) => {
+                return response.json()
+            })
+            .then((state) => {
+                wifirssi.innerText = '📶 ' + state.rssi + ' dBm';
+                /**/ if (state.rssi > -65) wifirssi.style.color = '#00B500';
+                else if (state.rssi > -70) wifirssi.style.color = '#AADA00';
+                else if (state.rssi > -75) wifirssi.style.color = '#BFDF00';
+                else if (state.rssi > -80) wifirssi.style.color = '#AA8B00';
+                else if (state.rssi > -85) wifirssi.style.color = '#AA3C00';
+                else if (state.rssi > -95) wifirssi.style.color = '#D52800';
+                else wifirssi.style.color = '#a11';
+            })
+            .catch((e) => {
+                wifirssi.innerText = 'Rozłączono';
+                wifirssi.style.color = '#a11';
+            })
+        ;
+    }, 3000);
+});
+        </script>
+    </body>
+</html>
